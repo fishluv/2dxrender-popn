@@ -22,7 +22,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v3
         with:
-          dotnet-version: '4.0'  # Specify the .NET version (use the version your project needs)
+          dotnet-version: '4.8'  # Specify the .NET version (use the version your project needs)
 
       # Restore dependencies
       - name: Restore dependencies
