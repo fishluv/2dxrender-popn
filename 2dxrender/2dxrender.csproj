@@ -8,7 +8,7 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>_2dxrender</RootNamespace>
     <AssemblyName>2dxrender</AssemblyName>
-    <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <TargetFrameworkProfile />
