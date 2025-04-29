@@ -26,3 +26,7 @@ Copyright c  2018
   --version                  Display version information.
 
 ```
+
+## References
+
+For more on .2dx and .bin parsing, see [pms2bemani.py](https://github.com/CrazyRedMachine/popnhax_tools/blob/37864e9542f5222610d180703c6b4d3cae7ea0a1/pms2bemani/pms2bemani/pms2bemani.py), [popntowav](https://github.com/Gi-z/popntowav), and [popn-chart-parser](https://github.com/fishluv/popn-chart-parser).
