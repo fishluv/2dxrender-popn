@@ -2,18 +2,12 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
 
-using NAudio;
-using NAudio.WindowsMediaFormat;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
-using NAudio.Lame;
 using System.IO;
 
 using CommandLine;
-
-using Newtonsoft.Json;
 
 namespace _2dxrender
 {
@@ -21,81 +15,27 @@ namespace _2dxrender
     {
         enum ChartCommands
         {
-            KeyP1 = 0,
-            KeyP2 = 1,
-            LoadSampleP1 = 2,
-            LoadSampleP2 = 3,
-            End = 6,
-            BgmNote = 7,
+            Key = 0x0145,
+            LoadSample = 0x0245,
+            PlayBgSample = 0x0345,
+            End = 0x0645,
+            PlaySample = 0x0745,
         }
 
         class KeyPosition
         {
-            public int offset;
-            public int keysoundId;
-            public int key;
-            public int player;
+            public uint offset;
+            public int sampleIdx; // This is 1-based.
 
-            public KeyPosition(int offset, int keysoundId, int key, int player)
+            public KeyPosition(uint offset, int sampleIdx)
             {
                 this.offset = offset;
-                this.keysoundId = keysoundId;
-                this.key = key;
-                this.player = player;
+                this.sampleIdx = sampleIdx;
             }
         }
 
         static Options options = new Options();
-        static int assistClapIdx = -1;
-
-        private static string GetTempFileName()
-        {
-            return Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
-        }
-
-        static List<string> getAudioSamplesFromS3p(BinaryReader reader)
-        {
-            var samples = new List<string>();
-
-            var fileCount = reader.ReadUInt32();
-
-            var tempPath = GetTempFileName();
-
-            if (!Directory.Exists(tempPath))
-            {
-                Directory.CreateDirectory(tempPath);
-            }
-
-            for (var i = 0; i < fileCount; i++)
-            {
-                reader.BaseStream.Seek(i * 8 + 8, SeekOrigin.Begin);
-
-                var offset = reader.ReadUInt32();
-                var size = reader.ReadInt32();
-
-                reader.BaseStream.Seek(offset, SeekOrigin.Begin);
-
-                if (Encoding.ASCII.GetString(reader.ReadBytes(4)) != "S3V0")
-                {
-                    Console.WriteLine("Not a valid S3V audio file");
-                    Environment.Exit(-1);
-                }
-
-                var dataOffset = reader.ReadUInt32();
-                var dataSize = reader.ReadInt32();
-
-                reader.BaseStream.Seek(offset + dataOffset, SeekOrigin.Begin);
-
-                var audioBytes = reader.ReadBytes(dataSize);
-                var tempFilename = Path.Combine(tempPath, String.Format("{0:d4}.wma", i + 1));
-
-                samples.Add(tempFilename);
-
-                File.WriteAllBytes(tempFilename, audioBytes);
-            }
-
-            return samples;
-        }
+        static int bgSampleIdx = 1; // This is 1-based. Should always be set during 2dx parsing but default to 1 just in case.
 
         static List<string> getAudioSamplesFrom2dx(BinaryReader reader)
         {
@@ -118,12 +58,24 @@ namespace _2dxrender
 
                 if (Encoding.ASCII.GetString(reader.ReadBytes(4)) != "2DX9")
                 {
-                    Console.WriteLine("Not a valid 2DX audio file @ {0:x8}", reader.BaseStream.Position - 4);
+                    Console.WriteLine("{0} Not a valid 2DX audio file @ {1:x8}", i, reader.BaseStream.Position - 4);
                     Environment.Exit(-1);
                 }
 
                 var dataOffset = reader.ReadUInt32();
                 var dataSize = reader.ReadInt32();
+
+                reader.ReadBytes(2);
+                // For bg samples (there should just be one in each chart) this is 0x0000.
+                // For non-bg samples this is usually 0xffff, but can also be some other nonzero value.
+                var sampleType = reader.ReadInt16();
+
+                // Bg sample is usually the first sample in the container, but not always.
+                // Save the index for later.
+                if (sampleType == 0)
+                {
+                    bgSampleIdx = i + 1;
+                }
 
                 reader.BaseStream.Seek(offset + dataOffset, SeekOrigin.Begin);
 
@@ -144,351 +96,115 @@ namespace _2dxrender
 
             FileAttributes attr = File.GetAttributes(inputFilename);
 
-            if ((attr & FileAttributes.Directory) == FileAttributes.Directory)
+            using (var reader = new BinaryReader(File.Open(inputFilename, FileMode.Open)))
             {
-                samples = Directory.GetFiles(inputFilename).OrderBy(x => x).ToList();
-            }
-            else
-            {
-                using (var reader = new BinaryReader(File.Open(inputFilename, FileMode.Open)))
-                {
-                    if (Encoding.ASCII.GetString(reader.ReadBytes(4)) == "S3P0")
-                    {
-                        samples = getAudioSamplesFromS3p(reader);
-                    }
-                    else
-                    {
-                        try
-                        {
-                            // Try parsing as .2dx
-                            samples = getAudioSamplesFrom2dx(reader);
-                        }
-                        catch
-                        {
-                            Console.WriteLine("Couldn't find parser for input audio file: {0}", inputFilename);
-                        }
-                    }
-                }
-            }
-
-            if (options.AssistClap)
-            {
-                if (File.Exists(options.AssistClapSound))
-                {
-                    var assistClapTempFilename = GetTempFileName();
-                    assistClapIdx = samples.Count;
-                    samples.Add(assistClapTempFilename);
-                    File.Copy(options.AssistClapSound, assistClapTempFilename);
-                }
-                else
-                {
-                    Console.WriteLine("Couldn't find clap file \"{0}\", skipping...", options.AssistClapSound);
-                    options.AssistClap = false;
-                }
+                samples = getAudioSamplesFrom2dx(reader);
             }
 
             return samples;
         }
 
-        private static int findSampleById(List<string> samples, int value, string prefix)
-        {
-            for (int idx = 0; idx < samples.Count; idx++)
-            {
-                var sample = samples[idx];
-
-                if (sample == Path.Combine(prefix, String.Format("{0:d4}.wav", value)) ||
-                    sample == Path.Combine(prefix, String.Format("{0:d4}.wma", value)))
-                {
-                    return idx;
-                }
-            }
-
-            return -1;
-        }
-
-        private static List<KeyPosition> parseJsonChartData(string filename, List<string> samples, int chartId)
-        {
-            var sounds = new List<KeyPosition>();
-            var loaded_samples = new List<Dictionary<short, int>>(){
-                new Dictionary<short, int>(),
-                new Dictionary<short, int>()
-            };
-
-            var chartIdLookup = new Dictionary<int, string>()
-            {
-                { 0, "input_sp_normal" },
-                { 1, "input_sp_hyper" },
-                { 2, "input_sp_another" },
-                { 3, "input_sp_beginner" },
-                { 4, "input_sp_black" },
-                { 6, "input_dp_normal" },
-                { 7, "input_dp_hyper" },
-                { 8, "input_dp_another" },
-                { 9, "input_dp_beginner" },
-                { 10, "input_dp_black" },
-            };
-
-            var json = File.ReadAllText(filename);
-            dynamic _chartData = JsonConvert.DeserializeObject(json);
-
-            int chartIdx = -1;
-            foreach (var chart in _chartData["charts"])
-            {
-                chartIdx++;
-
-                if (chart["chart_type"] == chartIdLookup[chartId])
-                {
-                    break;
-                }
-            }
-
-            if (chartIdx == -1)
-            {
-                Console.WriteLine("Couldn't find selected chart: {0}", chartId);
-                Environment.Exit(1);
-            }
-
-            dynamic chartData = _chartData["charts"][chartIdx];
-
-            var soundFolder = Path.GetDirectoryName(samples[0]);
-
-            bool isFloat = false;
-            var dicts = chartData["events"].ToObject<Dictionary<string, object>>();
-            var keys = new List<string>();
-            foreach (var dict in dicts)
-            {
-                keys.Add(dict.Key);
-            }
-
-            foreach (var key in keys)
-            {
-                string k = key.ToString();
-
-                if (isFloat)
-                {
-                    k = String.Format("{0:f}", key);
-                }
-                var _ev = chartData["events"][k];
-                for (int eventidx = 0; eventidx < _ev.Count; eventidx++)
-                {
-                    var ev = _ev[eventidx];
-
-                    int offset = ev["offset"];
-
-                    if ((ev["event"] == "note_p1" || ev["event"] == "note_p2") && offset != 0)
-                    {
-                        var playerId = ev["event"] == "note_p1" ? 0 : 1;
-                        int value = ev["value"];
-                        short param = ev["slot"];
-
-                        if (value != 0 && param == 7)
-                        {
-                            sounds.Add(new KeyPosition(offset + value, loaded_samples[playerId][param], param, playerId));
-
-                            if (options.AssistClap)
-                            {
-                                sounds.Add(new KeyPosition(offset + value, assistClapIdx, -1, 0));
-                            }
-                        }
-
-                        if (options.AssistClap && param == 7)
-                        {
-                            sounds.Add(new KeyPosition(offset, assistClapIdx, -1, 0));
-                        }
-                        
-                        sounds.Add(new KeyPosition(offset, loaded_samples[playerId][param], param, playerId));
-                    }
-                    else if (ev["event"] == "sample_p1" || ev["event"] == "sample_p2")
-                    {
-                        var playerId = ev["event"] == "sample_p1" ? 0 : 1;
-                        int value = ev["sound_id"];
-                        short param = ev["slot"];
-
-                        loaded_samples[playerId][param] = findSampleById(samples, value, soundFolder);
-
-                        // To simulate the engine loading a new sample before it's played, loop through and update everything
-                        // for that specific key from the current offset onward
-                        for (int i = 0; i < sounds.Count; i++)
-                        {
-                            if (sounds[i].player == playerId && sounds[i].key == param && sounds[i].offset >= offset)
-                            {
-                                sounds[i].keysoundId = loaded_samples[playerId][param];
-                            }
-                        }
-                    }
-                    else if (ev["event"] == "auto")
-                    {
-                        int value = ev["sound_id"];
-                        int sample_idx = findSampleById(samples, value, soundFolder);
-
-                        if (sample_idx == 0 && options.NoBgm)
-                        {
-                            continue;
-                        }
-
-                        sounds.Add(new KeyPosition(offset, sample_idx, -1, 0));
-                    }
-                    else if (ev["event"] == "end")
-                    {
-                        if (ev["player"] == null)
-                        {
-                            sounds.Add(new KeyPosition(offset, -1, -1, 0));
-                            sounds.Add(new KeyPosition(offset, -1, -1, 1));
-                        }
-                        else
-                        {
-                            int value = ev["player"];
-                            sounds.Add(new KeyPosition(offset, -1, -1, value));
-                        }
-                    }
-                }
-            }
-
-            return sounds;
-        }
-
         private static List<KeyPosition> parseChartData(BinaryReader reader, List<string> samples)
         {
             var sounds = new List<KeyPosition>();
-            var loaded_samples = new List<Dictionary<short, int>>(){
-                new Dictionary<short, int>(),
-                new Dictionary<short, int>()
-            };
+            var loadedSampleForKey = new Dictionary<uint, int>();
 
-            while (true)
+            // Old chart format - each command is 8 bytes:
+            //  4 bytes for offset
+            //  4 bytes for data
+            //
+            // New chart format (used since usaneko) - each command is 12 bytes:
+            //  4 bytes for offset
+            //  4 bytes for data
+            //  4 bytes for length (used only for hold notes, introduced in usaneko)
+            //
+            // Determine chart format by looking at 2nd 8 bytes (0x08-0x10).
+            //
+            // If value is 0, we know the chart is in the new format, because
+            // the first 4 bytes is the last 4 bytes of the 1st command (length, which is 0), and
+            // the second 4 bytes is the first 4 bytes of the 2nd command (offset, which is also 0).
+            //
+            // If the value is nonzero, we know the chart is in the old format, because
+            // the first 4 bytes is the first 4 bytes of the 2nd command (offset, which is 0), and
+            // the second 4 bytes is the second 4 bytes of the 2nd command (data, which is nonzero).
+            reader.BaseStream.Seek(8, SeekOrigin.Begin);
+            var isNewFormat = reader.ReadUInt64() == 0;
+
+            reader.BaseStream.Seek(0, SeekOrigin.Begin);
+
+            while (reader.BaseStream.Position < reader.BaseStream.Length)
             {
-                var offset = reader.ReadInt32();
-                var command = reader.ReadByte();
-                var param = reader.ReadByte();
-                var value = reader.ReadInt16();
+                // 4 bytes for timestamp/offset
+                var offset = reader.ReadUInt32();
 
-                if (offset == 0x7fffffff)
+                // 2 bytes for command
+                var command = reader.ReadUInt16();
+
+                // 2 bytes for value
+                var value = reader.ReadUInt16();
+                var val1 = (uint)value >> 12;
+                var val2 = value & 0xff;
+
+                if (isNewFormat)
                 {
-                    break;
+                    // Next 4 bytes is command length. We don't need it so skip it.
+                    reader.BaseStream.Seek(4, SeekOrigin.Current);
                 }
 
                 switch (command)
                 {
-                    case (byte)ChartCommands.KeyP1:
-                    case (byte)ChartCommands.KeyP2:
+                    case (ushort)ChartCommands.Key:
                         {
-                            var playerId = command - (byte)ChartCommands.KeyP1;
-
-                            if (value != 0 && param == 7)
-                            {
-                                sounds.Add(new KeyPosition(offset + value, loaded_samples[playerId][param], param, playerId));
-
-                                if (options.AssistClap)
-                                {
-                                    sounds.Add(new KeyPosition(offset + value, assistClapIdx, -1, 0));
-                                }
-                            }
-
-                            if (options.AssistClap && param == 7)
-                            {
-                                sounds.Add(new KeyPosition(offset, assistClapIdx, -1, 0));
-                            }
-
-                            sounds.Add(new KeyPosition(offset, loaded_samples[playerId][param], param, playerId));
+                            // val1 = ? (probably something related to hold notes - not needed here)
+                            // val2 = key index (0-based)
+                            sounds.Add(new KeyPosition(offset, loadedSampleForKey[(uint)val2]));
                         }
                         break;
 
-                    case (byte)ChartCommands.LoadSampleP1:
-                    case (byte)ChartCommands.LoadSampleP2:
+                    case (ushort)ChartCommands.LoadSample:
                         {
-                            var playerId = command - (byte)ChartCommands.LoadSampleP1;
-
-                            loaded_samples[playerId][param] = value - 1;
-
-                            // To simulate the engine loading a new sample before it's played, loop through and update everything
-                            // for that specific key from the current offset onward
-                            for (int i = 0; i < sounds.Count; i++)
-                            {
-                                if (sounds[i].player == playerId && sounds[i].key == param && sounds[i].offset >= offset)
-                                {
-                                    sounds[i].keysoundId = loaded_samples[playerId][param];
-                                }
-                            }
+                            // val1 = key index (0-based)
+                            // val2 = sample index (1-based)
+                            loadedSampleForKey[val1] = val2;
                         }
                         break;
 
-                    case (byte)ChartCommands.BgmNote:
+                    case (ushort)ChartCommands.PlayBgSample:
                         {
-                            if (value - 1 == 0 && options.NoBgm)
-                            {
-                                continue;
-                            }
-
-                            sounds.Add(new KeyPosition(offset, value - 1, -1, 0));
+                            sounds.Add(new KeyPosition(offset, bgSampleIdx));
                         }
                         break;
 
-                    case (byte)ChartCommands.End:
+                    case (ushort)ChartCommands.PlaySample:
                         {
-                            sounds.Add(new KeyPosition(offset, -1, -1, param));
+                            // val1 = ? (not needed here)
+                            // val2 = sample index (1-based)
+                            sounds.Add(new KeyPosition(offset, val2));
+                        }
+                        break;
+
+                    case (ushort)ChartCommands.End:
+                        {
+                            sounds.Add(new KeyPosition(offset, -1));
                         }
                         break;
                 }
             }
 
             return sounds;
-        }
-
-        static void parseChart(string filename, int chartId, string outputFilename, List<string> samples)
-        {
-            if (chartId < 0 || chartId > 0x60 / 8)
-            {
-                Console.WriteLine("Invalid chart ID");
-                goto cleanup;
-            }
-
-            if (filename.EndsWith(".json"))
-            {
-                var sounds = parseJsonChartData(filename, samples, chartId);
-                mixFinalAudio(outputFilename, sounds, samples);
-                return;
-            }
-
-            using (BinaryReader reader = new BinaryReader(File.Open(filename, FileMode.Open)))
-            {
-                reader.BaseStream.Seek(chartId * 8, SeekOrigin.Begin);
-
-                var offset = reader.ReadUInt32();
-                var filesize = reader.ReadInt32();
-
-                reader.BaseStream.Seek(offset, SeekOrigin.Begin);
-
-                var sounds = parseChartData(reader, samples);
-                mixFinalAudio(outputFilename, sounds, samples);
-            }
-
-            cleanup:
-            foreach (var sampleFilename in samples)
-            {
-                File.Delete(sampleFilename);
-            }
         }
 
         private static void mixFinalAudio(string outputFilename, List<KeyPosition> sounds, List<string> samples)
         {
             var mixedSamples = new List<OffsetSampleProvider>();
 
-            // Find P1 and P2 ends
-            int[] playerEnd = { -1, -1 };
             foreach (var sound in sounds)
             {
-                if (sound.keysoundId == -1 && sound.key == -1)
-                {
-                    playerEnd[sound.player] = sound.offset;
-                }
-            }
-
-            foreach (var sound in sounds)
-            {
-                if (sound.keysoundId == -1)
+                // -1 is special END value. 0 is dummy value put at beginning of charts.
+                if (sound.sampleIdx == -1 || sound.sampleIdx == 0)
                     continue;
 
-                var audioFile = new AudioFileReader(samples[sound.keysoundId]);
+                var audioFile = new AudioFileReader(samples[sound.sampleIdx - 1]); // Sample index is 1-based. Convert to 0-based for our sample array.
                 var volSample = new VolumeSampleProvider(audioFile);
 
                 if (volSample.WaveFormat.Channels == 1)
@@ -511,22 +227,10 @@ namespace _2dxrender
                     );
                 }
 
-                if (options.AssistClap && sound.keysoundId == assistClapIdx)
-                {
-                    volSample.Volume = options.AssistClapVolume;
-                }
-                else
-                {
-                    volSample.Volume = options.RenderVolume;
-                }
+                volSample.Volume = options.RenderVolume;
 
                 var sample = new OffsetSampleProvider(volSample);
                 sample.DelayBy = TimeSpan.FromMilliseconds(sound.offset);
-
-                if (sound.player >= 0 && sound.player <= 1 && playerEnd[sound.player] != -1 && sound.offset + audioFile.TotalTime.TotalMilliseconds > playerEnd[sound.player])
-                {
-                    sample.Take = TimeSpan.FromMilliseconds(playerEnd[sound.player] - sound.offset);
-                }
 
                 mixedSamples.Add(sample);
             }
@@ -539,33 +243,27 @@ namespace _2dxrender
             }
 
             var mixer = new MixingSampleProvider(mixers);
+            WaveFileWriter.CreateWaveFile16(outputFilename, mixer);
+        }
 
-            if (options.OutputFormat.ToLower() == "wav")
+        static void parseChart(string binFilename, string outputFilename, List<string> samples)
+        {
+            using (BinaryReader reader = new BinaryReader(File.Open(binFilename, FileMode.Open)))
             {
-                WaveFileWriter.CreateWaveFile16(outputFilename, mixer);
+                var sounds = parseChartData(reader, samples);
+                mixFinalAudio(outputFilename, sounds, samples);
             }
-            else if (options.OutputFormat.ToLower() == "mp3")
+
+            foreach (var sampleFilename in samples)
             {
-                var tempFilename = GetTempFileName();
-
-                WaveFileWriter.CreateWaveFile16(tempFilename, mixer);
-
-                ID3TagData id3 = new ID3TagData();
-                id3.Album = options.Id3Album;
-                id3.AlbumArtist = options.Id3AlbumArtist;
-                id3.Title = options.Id3Title;
-                id3.Artist = options.Id3Artist;
-                id3.Genre = options.Id3Genre;
-                id3.Track = options.Id3Track;
-                id3.Year = options.Id3Year;
-
-                using (var reader = new AudioFileReader(tempFilename))
-                using (var writer = new LameMP3FileWriter(outputFilename, reader.WaveFormat, 320, id3))
+                try
                 {
-                    reader.CopyTo(writer);
+                    File.Delete(sampleFilename);
                 }
-
-                File.Delete(tempFilename);
+                catch
+                {
+                    Console.WriteLine("Couldn't delete temp file {0} for some reason", sampleFilename);
+                }
             }
         }
 
@@ -574,7 +272,7 @@ namespace _2dxrender
             Parser.Default.ParseArguments<Options>(args).WithParsed<Options>(opts => options = opts).WithNotParsed(errors => Environment.Exit(1));
 
             var samples = getAudioSamples(options.InputAudio);
-            parseChart(options.InputChart, options.ChartId, options.OutputFile, samples);
+            parseChart(options.InputChart, options.OutputFile, samples);
         }
     }
 }

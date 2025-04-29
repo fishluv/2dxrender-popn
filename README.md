@@ -1,5 +1,5 @@
-# 2dxrender
-Render IIDX charts into audio files
+# 2dxrender-popn
+Render pop'n music charts into audio files
 
 ## 2dxrender.exe
 ```
@@ -53,48 +53,3 @@ Copyright c  2018
 - You can specify a .2dx, .s3p, or folder for the input keysounds
 - MP3 is restricted to CBR 320 at the moment due to a bug with NAudio.Lame
 - Requires .NET 4.0
-
-## Mass converter (render_songs.py)
-```
-cmd> python3 render_songs.py --help
-usage: render_songs.py [-h] --songs-folder SONGS_FOLDER
-                       [--output-folder OUTPUT_FOLDER]
-                       [--music-database-file MUSIC_DATABASE_FILE]
-                       [--charts CHARTS [CHARTS ...]] [--id3-album ID3_ALBUM]
-                       [--id3-album-artist ID3_ALBUM_ARTIST]
-                       [--id3-year ID3_YEAR] [--id3-album-art ID3_ALBUM_ART]
-                       [--output-format OUTPUT_FORMAT]
-
-optional arguments:
-  -h, --help            show this help message and exit
-  --songs-folder SONGS_FOLDER
-                        Input songs folder
-  --output-folder OUTPUT_FOLDER
-                        Output folder
-  --music-database-file MUSIC_DATABASE_FILE
-                        Input music database file
-  --charts CHARTS [CHARTS ...]
-                        Charts to render for each song
-  --id3-album ID3_ALBUM
-                        ID3 album
-  --id3-album-artist ID3_ALBUM_ARTIST
-                        ID3 album artist
-  --id3-year ID3_YEAR   ID3 year
-  --id3-album-art ID3_ALBUM_ART
-                        ID3 album art
-  --output-format OUTPUT_FORMAT
-                        Output format: WAV or MP3
-```
-
-- Automatically tag things if you point it at your music_data.bin file using `--music-database-file`
-- Requires at least Python 3.4 (tested with 3.6, but 3.4 should be fine. Lower may or may not work)
-- Valid charts IDs:
-```
-0: "SP NORMAL",
-1: "SP HYPER",
-2: "SP ANOTHER",
-3: "SP BEGINNER",
-6: "DP NORMAL",
-7: "DP HYPER",
-8: "DP ANOTHER",
-```
